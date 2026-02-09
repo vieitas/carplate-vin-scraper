@@ -50,17 +50,28 @@ async function scrapeVIN(plate, state) {
     });
 
     const page = await browser.newPage();
-    
+
     // Configurar timeout e user agent
-    await page.setDefaultNavigationTimeout(60000);
+    await page.setDefaultNavigationTimeout(90000); // Aumentar timeout para 90s
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    // Bloquear recursos desnecessários para acelerar
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const resourceType = req.resourceType();
+      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
     
     console.log(`Acessando GoodCar.com para placa: ${plate}, estado: ${state}`);
-    
-    // Navegar para a página principal
+
+    // Navegar para a página principal com timeout maior e waitUntil mais flexível
     await page.goto('https://www.goodcar.com/', {
-      waitUntil: 'networkidle2',
-      timeout: 60000
+      waitUntil: 'domcontentloaded', // Mais rápido que networkidle2
+      timeout: 90000
     });
 
     // Aguardar um pouco para garantir que a página carregou
@@ -169,6 +180,9 @@ async function scrapeVIN(plate, state) {
 
 // Rota principal - GET /vin
 app.get('/vin', async (req, res) => {
+  // Aumentar timeout da requisição para 2 minutos
+  req.setTimeout(120000);
+
   try {
     const { plate, state } = req.query;
 
