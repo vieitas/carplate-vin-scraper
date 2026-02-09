@@ -36,8 +36,15 @@ async function scrapeVIN(plate, state) {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
-        '--disable-gpu'
-      ]
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process'
+      ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH ||
+                      process.env.CHROME_BIN ||
+                      '/usr/bin/chromium-browser' ||
+                      puppeteer.executablePath()
     });
 
     const page = await browser.newPage();
