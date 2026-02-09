@@ -7,6 +7,9 @@ const chromium = require('@sparticuz/chromium');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Helper function para substituir waitForTimeout (removido no Puppeteer novo)
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -75,13 +78,13 @@ async function scrapeVIN(plate, state) {
     });
 
     // Aguardar um pouco para garantir que a página carregou
-    await page.waitForTimeout(2000);
+    await wait(2000);
 
     // Clicar no tab de License Plate
     await page.waitForSelector('#licenseTab-main', { visible: true });
     await page.click('#licenseTab-main');
-    
-    await page.waitForTimeout(1000);
+
+    await wait(1000);
 
     // Preencher o campo de placa
     await page.waitForSelector('#search-platemain', { visible: true });
@@ -91,7 +94,7 @@ async function scrapeVIN(plate, state) {
     await page.waitForSelector('#searchplateform-state', { visible: true });
     await page.select('#searchplateform-state', state);
 
-    await page.waitForTimeout(1000);
+    await wait(1000);
 
     // Clicar no botão de busca
     const searchButton = await page.$('.btn-search-plate');
@@ -108,7 +111,7 @@ async function scrapeVIN(plate, state) {
     console.log('Formulário enviado, aguardando resultados...');
 
     // Aguardar a página de resultados carregar
-    await page.waitForTimeout(3000);
+    await wait(3000);
 
     // Tentar extrair o VIN da página de resultados
     // O VIN geralmente aparece na URL ou no conteúdo da página
