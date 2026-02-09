@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
+const puppeteerCore = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -29,22 +31,22 @@ async function scrapeVIN(plate, state) {
   
   try {
     // Inicializar navegador
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
+    // Usar chromium otimizado para serverless em produção
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    browser = await (isProduction ? puppeteerCore : puppeteer).launch({
+      headless: chromium.headless,
+      args: isProduction ? chromium.args : [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process'
+        '--disable-gpu'
       ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH ||
-                      process.env.CHROME_BIN ||
-                      '/usr/bin/chromium-browser' ||
-                      puppeteer.executablePath()
+      executablePath: isProduction
+        ? await chromium.executablePath()
+        : puppeteer.executablePath(),
+      ignoreHTTPSErrors: true
     });
 
     const page = await browser.newPage();
