@@ -103,7 +103,23 @@ async function scrapeVIN(plate, state) {
       searchButton.click()
     ]);
 
-    console.log('Página de resultados carregada, buscando VIN...');
+    console.log('Página de resultados carregada, aguardando processamento...');
+
+    // Aguardar a página processar a busca (ela mostra "Please wait" primeiro)
+    // Esperar até que o loading desapareça ou timeout de 30s
+    try {
+      await page.waitForFunction(
+        () => {
+          const bodyText = document.body.innerText;
+          // Verificar se saiu da tela de loading
+          return !bodyText.includes('Please wait. This should take only a few seconds.');
+        },
+        { timeout: 30000 }
+      );
+      console.log('Processamento concluído, buscando VIN...');
+    } catch (e) {
+      console.log('Timeout aguardando processamento, tentando buscar VIN mesmo assim...');
+    }
 
     // Tentar extrair o VIN da página de resultados
     const currentUrl = page.url();
@@ -131,13 +147,17 @@ async function scrapeVIN(plate, state) {
         '#vin',
         '.vehicle-vin',
         '[class*="vin"]',
-        '[id*="vin"]'
+        '[id*="vin"]',
+        'a[href*="/vin/"]',  // Links com VIN na URL
+        '.vehicle-info',
+        '.car-details'
       ];
 
       for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          const text = element.textContent || element.getAttribute('data-vin') || element.value;
+        const elements = document.querySelectorAll(selector);
+        for (const element of elements) {
+          // Verificar texto, atributos e href
+          const text = element.textContent || element.getAttribute('data-vin') || element.value || element.href || '';
           const vinMatch = text.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
           if (vinMatch) return { vin: vinMatch[0], source: 'selector: ' + selector };
         }
