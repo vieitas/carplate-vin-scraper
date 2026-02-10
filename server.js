@@ -77,24 +77,17 @@ async function scrapeVIN(plate, state) {
       timeout: 90000
     });
 
-    // Aguardar um pouco para garantir que a página carregou
-    await wait(2000);
-
     // Clicar no tab de License Plate
-    await page.waitForSelector('#licenseTab-main', { visible: true });
+    await page.waitForSelector('#licenseTab-main', { visible: true, timeout: 10000 });
     await page.click('#licenseTab-main');
 
-    await wait(1000);
-
     // Preencher o campo de placa
-    await page.waitForSelector('#search-platemain', { visible: true });
-    await page.type('#search-platemain', plate);
+    await page.waitForSelector('#search-platemain', { visible: true, timeout: 10000 });
+    await page.type('#search-platemain', plate, { delay: 10 });
 
     // Selecionar o estado
-    await page.waitForSelector('#searchplateform-state', { visible: true });
+    await page.waitForSelector('#searchplateform-state', { visible: true, timeout: 10000 });
     await page.select('#searchplateform-state', state);
-
-    await wait(1000);
 
     // Clicar no botão de busca
     const searchButton = await page.$('.btn-search-plate');
@@ -102,25 +95,24 @@ async function scrapeVIN(plate, state) {
       throw new Error('Botão de busca não encontrado');
     }
 
+    console.log('Enviando formulário...');
+
     // Aguardar navegação após clicar no botão
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }),
       searchButton.click()
     ]);
 
-    console.log('Formulário enviado, aguardando resultados...');
-
-    // Aguardar a página de resultados carregar
-    await wait(3000);
+    console.log('Página de resultados carregada, buscando VIN...');
 
     // Tentar extrair o VIN da página de resultados
-    // O VIN geralmente aparece na URL ou no conteúdo da página
     const currentUrl = page.url();
     console.log('URL atual:', currentUrl);
 
-    // Verificar se há VIN na URL
+    // Método 1: Verificar se há VIN na URL
     const vinFromUrl = currentUrl.match(/vin[\/=]([A-HJ-NPR-Z0-9]{17})/i);
     if (vinFromUrl) {
+      console.log('VIN encontrado na URL:', vinFromUrl[1]);
       return {
         success: true,
         vin: vinFromUrl[1].toUpperCase(),
@@ -130,45 +122,72 @@ async function scrapeVIN(plate, state) {
       };
     }
 
-    // Tentar encontrar VIN no conteúdo da página
-    const vinFromPage = await page.evaluate(() => {
-      // Procurar por padrão de VIN (17 caracteres alfanuméricos)
+    // Método 2: Buscar VIN em múltiplos lugares da página
+    const vinData = await page.evaluate(() => {
+      // Procurar em seletores comuns
+      const selectors = [
+        '[data-vin]',
+        '.vin-number',
+        '#vin',
+        '.vehicle-vin',
+        '[class*="vin"]',
+        '[id*="vin"]'
+      ];
+
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element) {
+          const text = element.textContent || element.getAttribute('data-vin') || element.value;
+          const vinMatch = text.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
+          if (vinMatch) return { vin: vinMatch[0], source: 'selector: ' + selector };
+        }
+      }
+
+      // Procurar no texto completo da página
       const bodyText = document.body.innerText;
       const vinMatch = bodyText.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
-      return vinMatch ? vinMatch[0] : null;
+      if (vinMatch) return { vin: vinMatch[0], source: 'body_text' };
+
+      // Procurar no HTML
+      const htmlMatch = document.documentElement.innerHTML.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
+      if (htmlMatch) return { vin: htmlMatch[0], source: 'html' };
+
+      return null;
     });
 
-    if (vinFromPage) {
+    if (vinData) {
+      console.log('VIN encontrado via', vinData.source, ':', vinData.vin);
       return {
         success: true,
-        vin: vinFromPage.toUpperCase(),
+        vin: vinData.vin.toUpperCase(),
         plate: plate,
         state: state,
-        source: 'page_content'
+        source: vinData.source
       };
     }
 
-    // Se não encontrou VIN, verificar se há mensagem de erro
-    const errorMessage = await page.evaluate(() => {
-      const errorElement = document.querySelector('.error, .alert-danger, .no-results');
-      return errorElement ? errorElement.innerText : null;
+    // Se não encontrou VIN, coletar informações de debug
+    const debugInfo = await page.evaluate(() => {
+      return {
+        url: window.location.href,
+        title: document.title,
+        bodyPreview: document.body.innerText.substring(0, 500),
+        hasError: !!document.querySelector('.error, .alert-danger, .no-results')
+      };
     });
 
-    if (errorMessage) {
-      return {
-        success: false,
-        error: 'VIN não encontrado',
-        message: errorMessage,
-        plate: plate,
-        state: state
-      };
-    }
+    console.log('Debug - Não encontrou VIN:', debugInfo);
 
     return {
       success: false,
       error: 'VIN não encontrado na página de resultados',
       plate: plate,
-      state: state
+      state: state,
+      debug: {
+        url: debugInfo.url,
+        title: debugInfo.title,
+        preview: debugInfo.bodyPreview
+      }
     };
 
   } catch (error) {
