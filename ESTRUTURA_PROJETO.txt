@@ -1,0 +1,200 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    ESTRUTURA DO PROJETO - CarPlate VIN Scraper
+═══════════════════════════════════════════════════════════════════════════════
+
+📁 CarPlate/
+│
+├── 🚀 ARQUIVOS PRINCIPAIS (ENVIAR AO SERVIDOR)
+│   ├── ✅ server.js                    [OBRIGATÓRIO] Código principal (8 KB)
+│   ├── ✅ package.json                 [OBRIGATÓRIO] Dependências (500 B)
+│   ├── ⭐ ecosystem.config.js          [RECOMENDADO] Config PM2 (400 B)
+│   ├── ⭐ install.sh                   [RECOMENDADO] Script instalação (2 KB)
+│   ├── ⭐ Procfile                     [HEROKU] Config Heroku (20 B)
+│   └── ⭐ README.md                    [RECOMENDADO] Documentação (6 KB)
+│
+├── 📚 DOCUMENTAÇÃO (REFERÊNCIA LOCAL)
+│   ├── 📖 DEPLOY_GUIDE.md              Guia completo de deploy
+│   ├── ⚡ QUICK_START.md               Guia rápido de deploy
+│   ├── 📋 CHECKLIST.md                 Checklist passo a passo
+│   ├── 💡 USAGE_EXAMPLES.md            Exemplos de uso da API
+│   ├── 📦 FILES_TO_UPLOAD.txt          Lista de arquivos
+│   ├── 📦 📦_ARQUIVOS_PARA_SERVIDOR.md Resumo de arquivos
+│   └── 📁 ESTRUTURA_PROJETO.txt        Este arquivo
+│
+├── ⚙️ CONFIGURAÇÃO LOCAL (NÃO ENVIAR)
+│   ├── ❌ .env.example                 Exemplo de configuração
+│   ├── ❌ start.ps1                    Script PowerShell local
+│   ├── ❌ start.bat                    Script Batch local
+│   └── ✅ .gitignore                   Arquivos ignorados pelo Git
+│
+└── 📦 GERADOS AUTOMATICAMENTE (NÃO ENVIAR)
+    ├── ❌ node_modules/                Dependências instaladas
+    └── ❌ package-lock.json             Lock file do npm
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 RESUMO POR TIPO DE DEPLOY:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1️⃣  VPS/SERVIDOR LINUX (Mínimo)                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ✅ server.js                                                                 │
+│ ✅ package.json                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2️⃣  VPS/SERVIDOR LINUX (Completo com PM2)                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ✅ server.js                                                                 │
+│ ✅ package.json                                                              │
+│ ✅ ecosystem.config.js                                                       │
+│ ✅ install.sh                                                                │
+│ ⭐ README.md                                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3️⃣  HEROKU                                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ✅ server.js                                                                 │
+│ ✅ package.json                                                              │
+│ ✅ Procfile                                                                  │
+│ ⭐ README.md                                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4️⃣  RAILWAY / RENDER                                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ✅ server.js                                                                 │
+│ ✅ package.json                                                              │
+│ ⭐ README.md                                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📊 FLUXO DE DEPLOY:
+
+┌─────────────┐
+│   LOCAL     │
+│  (Seu PC)   │
+└──────┬──────┘
+       │
+       │ Upload via SCP/SFTP/Git
+       │ (server.js + package.json)
+       ▼
+┌─────────────┐
+│  SERVIDOR   │
+│   (VPS)     │
+└──────┬──────┘
+       │
+       │ npm install
+       │ (instala dependências)
+       ▼
+┌─────────────┐
+│node_modules/│
+│  (criado)   │
+└──────┬──────┘
+       │
+       │ node server.js
+       │ ou pm2 start
+       ▼
+┌─────────────┐
+│ API RODANDO │
+│   :8080     │
+└─────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔄 DEPENDÊNCIAS (instaladas automaticamente com npm install):
+
+📦 Principais:
+  ├── express@^4.18.2          Framework web
+  ├── puppeteer@^24.15.0       Web scraping / automação
+  └── cors@^2.8.5              CORS middleware
+
+📦 Dependências do Puppeteer (automáticas):
+  ├── chromium-bidi
+  ├── devtools-protocol
+  ├── ws
+  └── ~200 outras dependências
+
+Total: ~213 pacotes (~150 MB instalados)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🌐 ENDPOINTS DA API:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ GET /                                                                        │
+│ └─ Informações sobre a API                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ GET /health                                                                  │
+│ └─ Status da API                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ GET /vin?plate={PLACA}&state={ESTADO}                                       │
+│ └─ Buscar VIN por placa e estado                                            │
+│    Exemplo: /vin?plate=ABC123&state=CA                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+
+⚙️ VARIÁVEIS DE AMBIENTE:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PORT                  Porta do servidor (padrão: 3000)                      │
+│ NODE_ENV              Ambiente (development/production)                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Exemplo de uso:
+  PORT=8080 node server.js
+  ou
+  export PORT=8080 && node server.js
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📈 TAMANHO DOS ARQUIVOS:
+
+Arquivo                          Tamanho      Tipo
+─────────────────────────────────────────────────────────────────────────────
+server.js                        ~8 KB        JavaScript
+package.json                     ~500 B       JSON
+ecosystem.config.js              ~400 B       JavaScript
+install.sh                       ~2 KB        Shell Script
+Procfile                         ~20 B        Text
+README.md                        ~6 KB        Markdown
+DEPLOY_GUIDE.md                  ~12 KB       Markdown
+QUICK_START.md                   ~4 KB        Markdown
+CHECKLIST.md                     ~6 KB        Markdown
+USAGE_EXAMPLES.md                ~7 KB        Markdown
+─────────────────────────────────────────────────────────────────────────────
+TOTAL (arquivos essenciais)      ~8.5 KB      
+TOTAL (com documentação)         ~46 KB       
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ LEGENDA:
+
+✅ = Arquivo obrigatório / recomendado para enviar
+⭐ = Arquivo opcional mas recomendado
+❌ = NÃO enviar (gerado automaticamente ou local)
+📁 = Diretório
+📦 = Pacote/Dependência
+🚀 = Arquivo principal
+📚 = Documentação
+⚙️ = Configuração
+🌐 = Endpoint/API
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 RESPOSTA RÁPIDA: "Quais arquivos eu preciso?"
+
+    ┌─────────────────────────┐
+    │   APENAS 2 ARQUIVOS:    │
+    │                         │
+    │   1. server.js          │
+    │   2. package.json       │
+    │                         │
+    │   Isso é tudo! ✅       │
+    └─────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+
