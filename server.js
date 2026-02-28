@@ -1,13 +1,19 @@
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer');
-const puppeteerCore = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
+
+const IS_PROD = process.env.NODE_ENV === 'production';
+const PORT = process.env.PORT || 3000;
+
+let puppeteer, chromium;
+if (IS_PROD) {
+  puppeteer = require('puppeteer-core');
+  chromium = require('@sparticuz/chromium');
+} else {
+  puppeteer = require('puppeteer');
+  chromium = null;
+}
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const IS_PROD = process.env.NODE_ENV === 'production';
-
 app.use(cors());
 app.use(express.json());
 
@@ -17,12 +23,6 @@ const VALID_STATES = [
   'NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA',
   'WV','WI','WY'
 ];
-
-function isValidVin(v) {
-  return typeof v === 'string'
-    && /^[A-HJ-NPR-Z0-9]{17}$/.test(v)
-    && /[A-HJ-NPR-Z]/.test(v);
-}
 
 // ── Browser Singleton ────────────────────────────────────────────
 let _browser = null;
@@ -35,14 +35,19 @@ async function getBrowser() {
   _launching = true;
   try {
     console.log('[browser] launching...');
-    _browser = await (IS_PROD ? puppeteerCore : puppeteer).launch({
-      headless: IS_PROD ? chromium.headless : true,
-      args: IS_PROD
-        ? chromium.args
-        : ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
-      executablePath: IS_PROD ? await chromium.executablePath() : puppeteer.executablePath(),
-      ignoreHTTPSErrors: true,
-    });
+    const launchOptions = IS_PROD
+      ? {
+          headless: chromium.headless,
+          args: chromium.args,
+          executablePath: await chromium.executablePath(),
+          ignoreHTTPSErrors: true,
+        }
+      : {
+          headless: true,
+          args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
+          ignoreHTTPSErrors: true,
+        };
+    _browser = await puppeteer.launch(launchOptions);
     _browser.on('disconnected', () => { _browser = null; console.log('[browser] disconnected'); });
     console.log('[browser] ready');
     _queue.forEach(({ res }) => res(_browser));
@@ -58,101 +63,94 @@ async function getBrowser() {
 }
 getBrowser().catch(e => console.error('[browser] warmup error:', e.message));
 
-function findVinInText(text) {
-  const matches = Array.from(text.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g), m => m[0]);
-  return matches.find(isValidVin) || null;
-}
-
 async function scrapeVIN(plate, state) {
   const browser = await getBrowser();
   const page = await browser.newPage();
 
-  // collect all valid VINs from network responses
-  let resolveNetVin;
-  const netVinPromise = new Promise(resolve => { resolveNetVin = resolve; });
-
-  page.on('response', async response => {
-    try {
-      const ct = response.headers()['content-type'] || '';
-      if (!ct.includes('json') && !ct.includes('text')) return;
-      const text = await response.text().catch(() => '');
-      const vin = findVinInText(text);
-      if (vin) {
-        console.log('[net] valid VIN in response from', response.url().substring(0, 80));
-        resolveNetVin(vin.toUpperCase());
-      }
-    } catch {}
-  });
-
   try {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    await page.setDefaultNavigationTimeout(25000);
+    await page.evaluateOnNewDocument(() => Object.defineProperty(navigator, 'webdriver', { get: () => undefined }));
 
-    // block heavy resources
+    // Block heavy resources to speed things up
     await page.setRequestInterception(true);
     page.on('request', req => {
       const rt = req.resourceType();
-      if (['image','stylesheet','font','media'].includes(rt)) return req.abort();
-      if (/google-analytics|googletagmanager|doubleclick|facebook|hotjar/.test(req.url())) return req.abort();
+      if (['image', 'font', 'media', 'stylesheet'].includes(rt)) return req.abort();
       req.continue();
     });
 
-    const url = 'https://www.goodcar.com/license-plate/' + state + '/' + plate;
-    console.log('[scrape] GET', url);
-
-    try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
-    } catch (navErr) {
-      console.log('[scrape] navigation timeout/error:', navErr.message);
-      // still try to extract from whatever loaded
-    }
-
-    console.log('[scrape] page url after goto:', page.url());
-
-    // DOM polling: look for valid VIN with letters every 300ms for up to 15s
-    const domVinPromise = new Promise(resolve => {
-      const deadline = Date.now() + 15000;
-      async function poll() {
-        try {
-          const vin = await page.evaluate(() => {
-            const re = /\b[A-HJ-NPR-Z0-9]{17}\b/g;
-            const hasLetter = v => /[A-HJ-NPR-Z]/.test(v);
-            // selectors first
-            for (const sel of ['[data-vin]','.vin-number','#vin','[class*="vin"]','a[href*="/vin/"]']) {
-              for (const el of document.querySelectorAll(sel)) {
-                const t = (el.textContent || el.getAttribute('data-vin') || el.href || '').trim();
-                const m = t.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
-                if (m && hasLetter(m[0])) return m[0].toUpperCase();
-              }
-            }
-            const hits = Array.from(document.body.innerText.matchAll(re), m => m[0]);
-            const v = hits.find(hasLetter);
-            if (v) return v.toUpperCase();
-            const htmlHits = Array.from(document.documentElement.innerHTML.matchAll(re), m => m[0]);
-            const vh = htmlHits.find(hasLetter);
-            return vh ? vh.toUpperCase() : null;
-          });
-          if (vin) return resolve(vin);
-        } catch {}
-        if (Date.now() < deadline) setTimeout(poll, 300);
-        else resolve(null);
+    // Watch for VIN in URL during navigation
+    let vinFromUrl = null;
+    page.on('framenavigated', frame => {
+      if (frame !== page.mainFrame()) return;
+      const url = frame.url();
+      console.log('[nav]', url.substring(0, 100));
+      const m = url.match(/searchVin=([A-HJ-NPR-Z0-9]{17})/i);
+      if (m) {
+        vinFromUrl = m[1].toUpperCase();
+        console.log('[scrape] VIN in URL:', vinFromUrl);
       }
-      poll();
     });
 
-    // race: network VIN vs DOM VIN vs 18s hard timeout
-    const vin = await Promise.race([
-      netVinPromise,
-      domVinPromise,
-      new Promise(resolve => setTimeout(() => resolve(null), 18000)),
-    ]);
+    console.log('[scrape] loading goodcar homepage...');
+    await page.goto('https://www.goodcar.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
 
-    if (vin) {
-      console.log('[scrape] VIN found:', vin);
-      return { success: true, vin, plate, state };
+    // Fill the form entirely via JS to avoid click-not-clickable issues
+    const fillResult = await page.evaluate((p, s) => {
+      const plateInput = document.querySelector('#search-platemain');
+      if (!plateInput) return 'ERROR: plate input #search-platemain not found';
+
+      const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      inputSetter.call(plateInput, p);
+      plateInput.dispatchEvent(new Event('input', { bubbles: true }));
+      plateInput.dispatchEvent(new Event('change', { bubbles: true }));
+      plateInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+
+      const stateSelect = document.querySelector('#searchplateform-state');
+      if (!stateSelect) return 'ERROR: state select #searchplateform-state not found';
+
+      const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      selectSetter.call(stateSelect, s);
+      stateSelect.dispatchEvent(new Event('input', { bubbles: true }));
+      stateSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // Force form validation flag
+      const form = document.querySelector('form.form-search-plate');
+      if (form) form.setAttribute('data-ready-to-submit', 'yes');
+
+      return 'ok plate=' + plateInput.value + ' state=' + stateSelect.value;
+    }, plate, state);
+
+    console.log('[scrape] fill:', fillResult);
+    if (fillResult.startsWith('ERROR')) throw new Error(fillResult);
+
+    await new Promise(r => setTimeout(r, 300));
+
+    // Submit form via JS click
+    const clickResult = await page.evaluate(() => {
+      const btn = document.querySelector('button.btn-search-plate');
+      if (!btn) return 'button not found';
+      btn.click();
+      return 'clicked';
+    });
+    console.log('[scrape] submit:', clickResult);
+
+    // Wait up to 35s for VIN to appear in URL
+    const deadline = Date.now() + 35000;
+    while (!vinFromUrl && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 300));
+      const url = page.url();
+      const m = url.match(/searchVin=([A-HJ-NPR-Z0-9]{17})/i);
+      if (m) vinFromUrl = m[1].toUpperCase();
     }
 
-    console.log('[scrape] VIN not found');
+    if (vinFromUrl) {
+      console.log('[scrape] success:', vinFromUrl);
+      return { success: true, vin: vinFromUrl, plate, state };
+    }
+
+    console.log('[scrape] VIN not found after 35s. Final URL:', page.url().substring(0, 120));
     return { success: false, error: 'VIN not found for this plate/state', plate, state };
 
   } finally {
@@ -162,7 +160,7 @@ async function scrapeVIN(plate, state) {
 
 // ── Routes ───────────────────────────────────────────────────────
 app.get('/vin', async (req, res) => {
-  req.setTimeout(60000);
+  req.setTimeout(90000);
   const { plate, state } = req.query;
   if (!plate) return res.status(400).json({ success: false, error: 'plate is required' });
   if (!state) return res.status(400).json({ success: false, error: 'state is required' });
@@ -176,7 +174,7 @@ app.get('/vin', async (req, res) => {
   try {
     const result = await scrapeVIN(plate.trim(), stateUpper);
     console.log('[route] done in', ((Date.now() - started) / 1000).toFixed(1) + 's');
-    return result.success ? res.json(result) : res.status(404).json(result);
+    return res.json(result);
   } catch (err) {
     console.error('[route /vin] error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
