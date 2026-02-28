@@ -24,6 +24,11 @@ const VALID_STATES = [
   'WV','WI','WY'
 ];
 
+const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/g;
+function isValidVin(v) {
+  return typeof v === 'string' && /^[A-HJ-NPR-Z0-9]{17}$/.test(v) && /[A-HJ-NPR-Z]/.test(v);
+}
+
 let _browser = null;
 let _launching = false;
 const _queue = [];
@@ -66,6 +71,33 @@ async function makePage() {
   return page;
 }
 
+// Poll page text/HTML for a valid VIN
+function pollPageForVin(page, timeoutMs) {
+  return new Promise(resolve => {
+    const deadline = Date.now() + timeoutMs;
+    async function poll() {
+      try {
+        const vin = await page.evaluate(() => {
+          const re = /\b[A-HJ-NPR-Z0-9]{17}\b/g;
+          const hasLetter = v => /[A-HJ-NPR-Z]/.test(v);
+          // Check page visible text
+          const text = document.body ? document.body.innerText : '';
+          const hits = Array.from(text.matchAll(re), m => m[0]).filter(hasLetter);
+          if (hits.length) return hits[0].toUpperCase();
+          // Check HTML (catches data attributes etc)
+          const html = document.documentElement ? document.documentElement.innerHTML : '';
+          const htmlHits = Array.from(html.matchAll(re), m => m[0]).filter(hasLetter);
+          return htmlHits.length ? htmlHits[0].toUpperCase() : null;
+        });
+        if (vin && isValidVin(vin)) { console.log('[poll] VIN in page:', vin); return resolve(vin); }
+      } catch {}
+      if (Date.now() < deadline) setTimeout(poll, 500);
+      else resolve(null);
+    }
+    poll();
+  });
+}
+
 async function scrapeVIN(plate, state) {
   const page = await makePage();
   try {
@@ -106,7 +138,6 @@ async function scrapeVIN(plate, state) {
 
     await new Promise(r => setTimeout(r, 500));
 
-    // Try both submit methods
     const clickResult = await page.evaluate(() => {
       const btn = document.querySelector('button.btn-search-plate');
       if (btn) { btn.click(); return 'btn.click'; }
@@ -116,17 +147,30 @@ async function scrapeVIN(plate, state) {
     });
     console.log('[scrape] submit:', clickResult);
 
-    const deadline = Date.now() + 45000;
-    while (!vinFromUrl && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 300));
-      const url = page.url();
-      const m = url.match(/searchVin=([A-HJ-NPR-Z0-9]{17})/i);
-      if (m) vinFromUrl = m[1].toUpperCase();
-    }
+    // Race: VIN from URL redirect OR VIN from page text (45s)
+    const vin = await Promise.race([
+      // Strategy 1: watch URL for searchVin= param (works locally / non-bot sessions)
+      new Promise(resolve => {
+        const deadline = Date.now() + 45000;
+        const check = async () => {
+          if (vinFromUrl) return resolve(vinFromUrl);
+          const url = page.url();
+          const m = url.match(/searchVin=([A-HJ-NPR-Z0-9]{17})/i);
+          if (m) return resolve(m[1].toUpperCase());
+          if (Date.now() < deadline) setTimeout(check, 300);
+          else resolve(null);
+        };
+        check();
+      }),
+      // Strategy 2: poll page text for valid VIN (works when GoodCar shows result inline)
+      pollPageForVin(page, 45000),
+      // Hard timeout
+      new Promise(resolve => setTimeout(() => resolve(null), 48000)),
+    ]);
 
-    if (vinFromUrl) {
-      console.log('[scrape] success:', vinFromUrl);
-      return { success: true, vin: vinFromUrl, plate, state };
+    if (vin && isValidVin(vin)) {
+      console.log('[scrape] success:', vin);
+      return { success: true, vin, plate, state };
     }
     console.log('[scrape] VIN not found. Final URL:', page.url().substring(0, 120));
     return { success: false, error: 'VIN not found for this plate/state', plate, state };
@@ -164,7 +208,7 @@ app.get('/debug', async (_req, res) => {
     const info = await page.evaluate(() => ({
       url: window.location.href,
       title: document.title,
-      bodyText: document.body ? document.body.innerText.substring(0, 1500) : 'no body',
+      bodyText: document.body ? document.body.innerText.substring(0, 2000) : 'no body',
       hasPlateInput: !!document.querySelector('#search-platemain'),
       hasStateSelect: !!document.querySelector('#searchplateform-state'),
       hasSearchBtn: !!document.querySelector('button.btn-search-plate'),
