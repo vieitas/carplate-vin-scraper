@@ -18,10 +18,14 @@ const VALID_STATES = [
   'WV','WI','WY'
 ];
 
-const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/;
-function isValidVin(v) { return /^[A-HJ-NPR-Z0-9]{17}$/.test(v) && /[A-HJ-NPR-Z]/.test(v); }
+// VIN must have 17 chars AND at least one letter
+function isValidVin(v) {
+  return typeof v === 'string'
+    && /^[A-HJ-NPR-Z0-9]{17}$/.test(v)
+    && /[A-HJ-NPR-Z]/.test(v);
+}
 
-// Browser Singleton
+// ── Browser Singleton ────────────────────────────────────────────
 let _browser = null;
 let _launching = false;
 const _queue = [];
@@ -34,7 +38,9 @@ async function getBrowser() {
     console.log('[browser] launching...');
     _browser = await (IS_PROD ? puppeteerCore : puppeteer).launch({
       headless: IS_PROD ? chromium.headless : true,
-      args: IS_PROD ? chromium.args : ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
+      args: IS_PROD
+        ? chromium.args
+        : ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
       executablePath: IS_PROD ? await chromium.executablePath() : puppeteer.executablePath(),
       ignoreHTTPSErrors: true,
     });
@@ -51,46 +57,75 @@ async function getBrowser() {
     _launching = false;
   }
 }
-
 getBrowser().catch(e => console.error('[browser] warmup error:', e.message));
 
+// ── Page setup ───────────────────────────────────────────────────
 async function setupPage(page) {
-  await page.setDefaultNavigationTimeout(90000);
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  await page.setDefaultNavigationTimeout(60000);
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  );
   await page.setRequestInterception(true);
   page.on('request', req => {
     const rt = req.resourceType();
-    const url = req.url();
     if (['image','stylesheet','font','media'].includes(rt)) return req.abort();
-    if (/google-analytics|googletagmanager|doubleclick|facebook|hotjar|newrelic/.test(url)) return req.abort();
+    if (/google-analytics|googletagmanager|doubleclick|facebook|hotjar|newrelic/.test(req.url()))
+      return req.abort();
     req.continue();
   });
 }
 
+// ── Extract VIN from page DOM (only valid ones) ──────────────────
 async function extractVinFromPage(page) {
-  const urlVin = page.url().match(/vin[/=]([A-HJ-NPR-Z0-9]{17})/i);
-  if (urlVin) return urlVin[1].toUpperCase();
+  const urlMatch = page.url().match(/vin[\/=]([A-HJ-NPR-Z0-9]{17})/i);
+  if (urlMatch && isValidVin(urlMatch[1])) return urlMatch[1].toUpperCase();
+
   return page.evaluate(() => {
-    for (const sel of ['[data-vin]','.vin-number','#vin','[class*="vin"]','[id*="vin"]','a[href*="/vin/"]']) {
+    const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/g;
+    function hasLetter(v) { return /[A-HJ-NPR-Z]/i.test(v); }
+
+    // 1. Specific selectors first
+    for (const sel of ['[data-vin]','.vin-number','#vin','[class*="vin"]','a[href*="/vin/"]']) {
       for (const el of document.querySelectorAll(sel)) {
-        const t = el.textContent || el.getAttribute('data-vin') || el.href || '';
+        const t = (el.textContent || el.getAttribute('data-vin') || el.href || '').trim();
         const m = t.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
-        if (m) return m[0].toUpperCase();
+        if (m && hasLetter(m[0])) return m[0].toUpperCase();
       }
     }
-    const all = Array.from(document.body.innerText.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g)).map(m => m[0]);
-    const valid = all.find(v => /[A-HJ-NPR-Z]/.test(v));
-    if (valid) return valid.toUpperCase();
-    const allHtml = Array.from(document.documentElement.innerHTML.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g)).map(m => m[0]);
-    const validHtml = allHtml.find(v => /[A-HJ-NPR-Z]/.test(v));
+    // 2. Scan visible text
+    const textMatches = Array.from(document.body.innerText.matchAll(VIN_RE), m => m[0]);
+    const validText = textMatches.find(hasLetter);
+    if (validText) return validText.toUpperCase();
+
+    // 3. Scan full HTML (last resort)
+    const htmlMatches = Array.from(document.documentElement.innerHTML.matchAll(VIN_RE), m => m[0]);
+    const validHtml = htmlMatches.find(hasLetter);
     return validHtml ? validHtml.toUpperCase() : null;
   });
 }
 
+// ── Wait for a valid VIN to appear in DOM (polls every 500ms) ────
+function waitForValidVinInDom(page, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    async function check() {
+      try {
+        const vin = await extractVinFromPage(page);
+        if (vin) return resolve(vin);
+        if (Date.now() >= deadline) return resolve(null);
+        setTimeout(check, 500);
+      } catch { resolve(null); }
+    }
+    check();
+  });
+}
+
+// ── Core scraper ─────────────────────────────────────────────────
 async function scrapeVIN(plate, state) {
   const browser = await getBrowser();
   const page = await browser.newPage();
 
+  // Network interception for VIN in API responses
   let resolveNetVin;
   const netVinPromise = new Promise(resolve => { resolveNetVin = resolve; });
   page.on('response', async response => {
@@ -98,70 +133,99 @@ async function scrapeVIN(plate, state) {
       const ct = response.headers()['content-type'] || '';
       if (!ct.includes('json') && !ct.includes('text')) return;
       const text = await response.text().catch(() => '');
-      const m = text.match(VIN_RE);
-      if (m && isValidVin(m[0])) { console.log('[net] VIN from', response.url()); resolveNetVin(m[0].toUpperCase()); }
+      const matches = Array.from(text.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g), m => m[0]);
+      const vin = matches.find(isValidVin);
+      if (vin) { console.log('[net] VIN from', response.url()); resolveNetVin(vin.toUpperCase()); }
     } catch {}
   });
 
   try {
     await setupPage(page);
 
+    // ── Strategy 1: direct URL ────────────────────────────────
     const directUrl = 'https://www.goodcar.com/license-plate/' + state + '/' + plate;
-    console.log('[scrape] direct ->', directUrl);
-    await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    console.log('[scrape] trying direct URL:', directUrl);
+    await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    const afterGoto = page.url();
-    const onResults = afterGoto.includes('license-plate') || afterGoto.toLowerCase().includes(plate.toLowerCase());
-    if (!onResults) {
-      console.log('[scrape] direct URL redirected, falling back to form...');
-      await page.goto('https://www.goodcar.com/', { waitUntil: 'domcontentloaded', timeout: 90000 });
-      await page.waitForSelector('#licenseTab-main', { visible: true, timeout: 10000 });
-      await page.click('#licenseTab-main');
-      await page.waitForSelector('#search-platemain', { visible: true, timeout: 10000 });
-      await page.type('#search-platemain', plate, { delay: 10 });
-      await page.waitForSelector('#searchplateform-state', { visible: true, timeout: 10000 });
-      await page.select('#searchplateform-state', state);
-      const btn = await page.$('.btn-search-plate');
-      if (!btn) throw new Error('Search button not found');
-      await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), btn.click()]);
+    const currentUrl = page.url();
+    console.log('[scrape] landed on:', currentUrl);
+
+    // Determine if we got a real results page (not a redirect to home or error)
+    const isResultsPage = (
+      currentUrl.includes('license-plate') &&
+      currentUrl.toLowerCase().includes(plate.toLowerCase().replace(/\s+/g,''))
+    );
+
+    if (isResultsPage) {
+      console.log('[scrape] on results page, waiting up to 25s for VIN...');
+      const vin = await Promise.race([
+        netVinPromise,
+        waitForValidVinInDom(page, 25000),
+        new Promise(res => setTimeout(() => res(null), 25000)),
+      ]);
+      if (vin) { console.log('[scrape] found VIN (direct):', vin); return { success: true, vin, plate, state }; }
+      console.log('[scrape] no VIN on direct URL, falling back...');
+    } else {
+      console.log('[scrape] direct URL redirected away from results page');
     }
 
+    // ── Strategy 2: form-based search ────────────────────────
+    console.log('[scrape] trying form search...');
+    await page.goto('https://www.goodcar.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    try {
+      await page.waitForSelector('#licenseTab-main', { visible: true, timeout: 8000 });
+      await page.click('#licenseTab-main');
+      await page.waitForSelector('#search-platemain', { visible: true, timeout: 8000 });
+      await page.type('#search-platemain', plate, { delay: 10 });
+      await page.waitForSelector('#searchplateform-state', { visible: true, timeout: 8000 });
+      await page.select('#searchplateform-state', state);
+      const btn = await page.$('.btn-search-plate');
+      if (!btn) throw new Error('search button not found');
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+        btn.click(),
+      ]);
+    } catch (formErr) {
+      console.log('[scrape] form interaction failed:', formErr.message);
+      return { success: false, error: 'VIN not found for this plate/state', plate, state };
+    }
+
+    console.log('[scrape] form submitted, waiting up to 25s for VIN...');
     const vin = await Promise.race([
       netVinPromise,
-      (async () => {
-        try {
-          await page.waitForFunction(() => !!document.documentElement.innerHTML.match(/\b[A-HJ-NPR-Z0-9]{17}\b/), { timeout: 60000 });
-          return extractVinFromPage(page);
-        } catch { return null; }
-      })(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('scrape timeout')), 90000)),
+      waitForValidVinInDom(page, 25000),
+      new Promise(res => setTimeout(() => res(null), 25000)),
     ]);
 
-    if (vin) { console.log('[scrape] VIN:', vin); return { success: true, vin, plate, state }; }
-    return { success: false, error: 'VIN not found', plate, state };
+    if (vin) { console.log('[scrape] found VIN (form):', vin); return { success: true, vin, plate, state }; }
+    return { success: false, error: 'VIN not found for this plate/state', plate, state };
+
   } finally {
     await page.close().catch(() => {});
   }
 }
 
+// ── Routes ───────────────────────────────────────────────────────
 app.get('/vin', async (req, res) => {
   req.setTimeout(120000);
   const { plate, state } = req.query;
   if (!plate) return res.status(400).json({ success: false, error: 'plate is required' });
   if (!state) return res.status(400).json({ success: false, error: 'state is required' });
   const stateUpper = state.toUpperCase();
-  if (!VALID_STATES.includes(stateUpper)) return res.status(400).json({ success: false, error: 'Invalid state' });
-  if (!/^[A-Za-z0-9 ]+$/.test(plate)) return res.status(400).json({ success: false, error: 'Invalid plate format' });
+  if (!VALID_STATES.includes(stateUpper))
+    return res.status(400).json({ success: false, error: 'Invalid state: ' + state });
+  if (!/^[A-Za-z0-9 ]+$/.test(plate))
+    return res.status(400).json({ success: false, error: 'Invalid plate format' });
   try {
     const result = await scrapeVIN(plate.trim(), stateUpper);
     return result.success ? res.json(result) : res.status(404).json(result);
   } catch (err) {
-    console.error('[route /vin]', err.message);
+    console.error('[route /vin] error:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
-app.get('/', (req, res) => res.json({ message: 'CarPlate VIN Scraper', usage: 'GET /vin?plate=ABC123&state=FL' }));
+app.get('/', (_req, res) => res.json({ message: 'CarPlate VIN Scraper', usage: 'GET /vin?plate=ABC123&state=FL' }));
 
 app.listen(PORT, () => console.log('Server on port ' + PORT));
