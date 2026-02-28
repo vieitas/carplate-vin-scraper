@@ -94,7 +94,7 @@ async function scrapeVIN(plate, state) {
 
     console.log('[scrape] loading goodcar homepage...');
     await page.goto('https://www.goodcar.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 3500));
 
     // Fill the form entirely via JS to avoid click-not-clickable issues
     const fillResult = await page.evaluate((p, s) => {
@@ -125,7 +125,7 @@ async function scrapeVIN(plate, state) {
     console.log('[scrape] fill:', fillResult);
     if (fillResult.startsWith('ERROR')) throw new Error(fillResult);
 
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 500));
 
     // Submit form via JS click
     const clickResult = await page.evaluate(() => {
@@ -137,7 +137,7 @@ async function scrapeVIN(plate, state) {
     console.log('[scrape] submit:', clickResult);
 
     // Wait up to 35s for VIN to appear in URL
-    const deadline = Date.now() + 35000;
+    const deadline = Date.now() + 45000;
     while (!vinFromUrl && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 300));
       const url = page.url();
