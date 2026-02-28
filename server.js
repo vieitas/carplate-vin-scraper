@@ -19,6 +19,7 @@ const VALID_STATES = [
 ];
 
 const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/;
+function isValidVin(v) { return /^[A-HJ-NPR-Z0-9]{17}$/.test(v) && /[A-HJ-NPR-Z]/.test(v); }
 
 // Browser Singleton
 let _browser = null;
@@ -77,10 +78,12 @@ async function extractVinFromPage(page) {
         if (m) return m[0].toUpperCase();
       }
     }
-    const bm = document.body.innerText.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
-    if (bm) return bm[0].toUpperCase();
-    const hm = document.documentElement.innerHTML.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
-    return hm ? hm[0].toUpperCase() : null;
+    const all = Array.from(document.body.innerText.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g)).map(m => m[0]);
+    const valid = all.find(v => /[A-HJ-NPR-Z]/.test(v));
+    if (valid) return valid.toUpperCase();
+    const allHtml = Array.from(document.documentElement.innerHTML.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g)).map(m => m[0]);
+    const validHtml = allHtml.find(v => /[A-HJ-NPR-Z]/.test(v));
+    return validHtml ? validHtml.toUpperCase() : null;
   });
 }
 
@@ -96,7 +99,7 @@ async function scrapeVIN(plate, state) {
       if (!ct.includes('json') && !ct.includes('text')) return;
       const text = await response.text().catch(() => '');
       const m = text.match(VIN_RE);
-      if (m) { console.log('[net] VIN from', response.url()); resolveNetVin(m[0].toUpperCase()); }
+      if (m && isValidVin(m[0])) { console.log('[net] VIN from', response.url()); resolveNetVin(m[0].toUpperCase()); }
     } catch {}
   });
 
